@@ -1,6 +1,7 @@
 import Foundation
 import CMUXMobileCore
 import CmuxAuthRuntime
+import CmuxMobileRPC
 import CmuxMobileShell
 import CmuxMobileShellModel
 import CmuxMobileSupport
@@ -206,12 +207,14 @@ struct CMUXMobileRootView: View {
             #if os(iOS)
             pushCoordinator.bind(store: store)
             #endif
-            // If the view mounts already authenticated (cached session, or a
-            // mock/fixture launch), `onChange(of: isAuthenticated)` never fires,
-            // so kick off the stored-Mac reconnect here too. Without this the
-            // workspace list's initial-connection status could never resolve
-            // because nothing updates `didFinishStoredMacReconnectAttempt`.
-            reconnectStoredMacIfNeeded()
+            // A DEBUG-injected attach URL is itself a temporary credential, so
+            // consume it before the Stack sign-in gate. This supports local
+            // Personal Team/Tailscale dogfood without changing production auth.
+            // If there is no injected URL, preserve the normal authenticated
+            // stored-Mac reconnect path.
+            if !connectUITestAttachURLIfNeeded() {
+                reconnectStoredMacIfNeeded()
+            }
             #if os(iOS)
             updateOnboardingMacDiscoveryKeepAlive()
             #endif
@@ -793,9 +796,15 @@ struct CMUXMobileRootView: View {
         //     kept intact for the XCUITest harness.
         // No-op unless one of those env vars is set, so normal launches are
         // unaffected.
-        guard isAuthenticated,
-              let attachURL = UITestConfig.dogfoodAttachURL ?? UITestConfig.attachURL else {
+        guard let attachURL = UITestConfig.dogfoodAttachURL ?? UITestConfig.attachURL else {
             return false
+        }
+        if !isAuthenticated {
+            // The injected URL can carry a short-lived, Mac-scoped attach token.
+            // Mount the shell long enough to validate and consume it; failures
+            // clear this temporary authentication in the result path below.
+            didAuthenticateWithAttachTicket = true
+            syncShellAuthentication(true)
         }
         if startupConnectionCoordinator.shouldFallBackFromInjectedAttach {
             return false
@@ -805,9 +814,34 @@ struct CMUXMobileRootView: View {
         }
         injectedAttachTaskAttempt = startupAttempt
         injectedAttachTask = Task { @MainActor in
-            let result = await dogfoodAttachPreparation.run {
-                await store.connectPairingURLResult(attachURL)
+            let usesIroh = (try? CmxAttachTicketInput.decode(attachURL))?
+                .routes.contains(where: { $0.kind == .iroh }) == true
+            writeLocalAttachDiagnostic("started usesIroh=\(usesIroh)")
+            let result: MobilePairingURLConnectionResult
+            if usesIroh {
+                result = await dogfoodAttachPreparation.run {
+                    await store.connectPairingURLResult(
+                        attachURL,
+                        userEnteredPairingCode: true
+                    )
+                }
+            } else {
+                // This URL came from the local DEBUG launcher, which minted the
+                // ticket directly from the target Mac. Treat its exact
+                // Tailscale destinations like a scanned local pairing code.
+                result = await store.connectPairingURLResult(
+                    attachURL,
+                    userEnteredPairingCode: true
+                )
             }
+            let connectionError = store.connectionError ?? "nil"
+            let connectionGuidance = store.connectionErrorGuidance ?? "nil"
+            writeLocalAttachDiagnostic(
+                "finished result=\(String(describing: result)) "
+                    + "state=\(String(describing: store.connectionState)) "
+                    + "error=\(connectionError) "
+                    + "guidance=\(connectionGuidance)"
+            )
             guard !Task.isCancelled,
                   injectedAttachTaskAttempt == startupAttempt else {
                 return
@@ -836,6 +870,20 @@ struct CMUXMobileRootView: View {
         return true
         #else
         return false
+        #endif
+    }
+
+    private func writeLocalAttachDiagnostic(_ message: String) {
+        #if DEBUG && os(iOS)
+        guard let documents = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        ).first else { return }
+        try? message.write(
+            to: documents.appendingPathComponent("cmux-local-attach.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
         #endif
     }
 

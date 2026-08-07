@@ -4,8 +4,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: ios/scripts/reload.sh --tag <tag> [--simulator <name>] [--simulator-id <id>] [--no-launch]
-       ios/scripts/reload.sh --tag <tag> --device [--device-id <id>] [--device-name <name>] [--team <team-id>] [--no-launch]
-       ios/scripts/reload.sh --tag <tag> --device-only [--device-id <id>] [--device-name <name>] [--team <team-id>] [--no-launch]
+       ios/scripts/reload.sh --tag <tag> --device [--device-id <id>] [--device-name <name>] [--team <team-id>] [--personal-team] [--no-launch]
+       ios/scripts/reload.sh --tag <tag> --device-only [--device-id <id>] [--device-name <name>] [--team <team-id>] [--personal-team] [--no-launch]
        ios/scripts/reload.sh --tag <tag> --simulator-only
 
 Build, install, and launch the cmux iOS app with an isolated tag.
@@ -42,6 +42,11 @@ Device signing uses the local Xcode account, or App Store Connect API
 credentials from ASC_API_KEY_ID, ASC_API_ISSUER_ID, ASC_API_KEY_PATH, or
 ios/Config/AppStoreConnect.local.plist. Set IOS_DEVELOPMENT_TEAM or pass
 --team when the project cannot infer a team.
+
+Free Apple Personal Teams cannot provision cmux's push notification and Sign
+in with Apple capabilities. Pass --personal-team to omit those entitlements
+from a local Debug device build. Push notifications and Sign in with Apple are
+unavailable in that build, but local remote-control features remain usable.
 EOF
 }
 
@@ -77,6 +82,7 @@ RELOAD_DEVICE=0
 SIMULATOR_ONLY=0
 ALLOW_PROVISIONING_UPDATES=1
 ALLOW_DEVICE_REGISTRATION=0
+PERSONAL_TEAM=0
 # Auto-setup: after install + launch, sign in (inject dogfood creds) and auto-pair
 # to the tagged Mac app. Default ON; opt out granularly.
 NO_SIGN_IN=0
@@ -147,6 +153,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-device-registration)
       ALLOW_DEVICE_REGISTRATION=1
+      shift
+      ;;
+    --personal-team)
+      PERSONAL_TEAM=1
       shift
       ;;
     --no-launch)
@@ -314,6 +324,14 @@ TAG_SLUG="$(sanitize_tag "$TAG")"
 DISPLAY_NAME="cmux DEV $TAG"
 BUNDLE_ID="dev.cmux.ios.$TAG_SLUG"
 DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/cmux-ios-$TAG_SLUG"
+if [[ "$PERSONAL_TEAM" -eq 1 ]]; then
+  # Keep the free-signing App ID separate from the full-capability App ID.
+  # Apple's provisioning service remembers capabilities registered against an
+  # identifier, so merely clearing CODE_SIGN_ENTITLEMENTS is not enough after a
+  # normal build has attempted to register this tag's identifier.
+  BUNDLE_ID="dev.cmux.ios.personal.$TAG_SLUG"
+  DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/cmux-ios-personal-$TAG_SLUG"
+fi
 QUEUE_SCRIPT="$IOS_DIR/../scripts/iphone-install-queue.sh"
 
 # Enforced verification default: simulator + iPhone. When a default device id
@@ -878,6 +896,14 @@ reload_device() {
     SWIFT_COMPILATION_MODE=wholemodule
     GCC_OPTIMIZATION_LEVEL=s
   )
+
+  if [[ "$PERSONAL_TEAM" -eq 1 ]]; then
+    echo "==> Personal Team signing: using capability-free app entitlements"
+    # An explicit empty plist is intentional. With no entitlements path at all,
+    # Xcode's automatic signing can still infer the target's normal capability
+    # set while constructing a managed profile.
+    build_args+=("CODE_SIGN_ENTITLEMENTS=Config/cmux-personal.entitlements")
+  fi
 
   if [[ "${#SWIFT_WORKAROUND_ARGS[@]}" -gt 0 ]]; then
     build_args+=("${SWIFT_WORKAROUND_ARGS[@]}")

@@ -1,5 +1,7 @@
 import CMUXAuthCore
+import CMUXMobileCore
 import CmuxAuthRuntime
+import CmuxMobileShell
 import CmuxMobileSupport
 import CmuxMobileTransport
 import Foundation
@@ -28,9 +30,11 @@ public struct MobileAuthComposition {
     /// development and Release to production, but an ``authEnvironmentOverrideKey``
     /// entry (from `LocalConfig.plist`, or the Info.plist value
     /// `ios/scripts/reload.sh --prod-auth` bakes) flips it, so a sideloaded
-    /// dev build can test production account behavior. Build compatibility is
-    /// enforced separately and remains exact-tag DEV to DEV. Exposed so the
-    /// identity provider can label the channel its user ids belong to.
+    /// dev build can test production account behavior. The resolved channel
+    /// also selects Mac build compatibility: production-auth clients use
+    /// Stable/Nightly Macs, while development-auth clients remain exact-tag.
+    /// Exposed so the identity provider can label the channel its user ids
+    /// belong to.
     public let authEnvironment: CMUXAuthEnvironment
 
     /// UIKit protected-data availability bridge used by auth session restore.
@@ -158,6 +162,21 @@ public struct MobileAuthComposition {
             Task { await coordinator.revalidateSession() }
         }
         coordinator.start()
+    }
+
+    /// Selects the Mac instances this resolved auth channel may connect to.
+    ///
+    /// A locally signed DEBUG build can deliberately target production auth
+    /// (`ios/scripts/reload.sh --prod-auth`). That build is a companion for
+    /// Stable/Nightly Macs even though its compiler configuration is DEBUG.
+    /// Development-auth builds retain exact-tag isolation between concurrent
+    /// developer and agent instances.
+    public func macBuildCompatibilityPolicy(
+        buildScope: MobileIOSBuildScope?
+    ) -> MobileMacBuildCompatibilityPolicy {
+        authEnvironment == .production
+            ? .official
+            : .current(buildScope: buildScope)
     }
 
     private static var isDevelopmentBuild: Bool {

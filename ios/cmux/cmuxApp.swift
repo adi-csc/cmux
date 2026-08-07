@@ -29,7 +29,7 @@ struct cmuxApp: App {
             buildStamp: AppCompositionRoot.diagnosticBuildStamp,
             role: .iosClient
         )
-        let buildCompatibilityPolicy = MobileMacBuildCompatibilityPolicy.current(
+        let buildCompatibilityPolicy = auth.macBuildCompatibilityPolicy(
             buildScope: MobileIOSBuildScope.current()
         )
         let iroh = MobileIrohRuntimeComposition(

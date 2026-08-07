@@ -371,7 +371,7 @@ public struct CMUXMobileRootScene: View {
     ) -> CMUXMobileShellStore {
         let coordinator = auth.coordinator
         let buildScope = MobileIOSBuildScope.current()
-        let buildCompatibilityPolicy = MobileMacBuildCompatibilityPolicy.current(
+        let buildCompatibilityPolicy = auth.macBuildCompatibilityPolicy(
             buildScope: buildScope
         )
         let identityProvider = AuthCoordinatorIdentityProvider(

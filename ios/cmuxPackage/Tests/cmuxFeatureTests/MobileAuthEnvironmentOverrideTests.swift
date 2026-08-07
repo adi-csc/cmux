@@ -19,9 +19,9 @@ private struct OfflineReachabilityStub: ReachabilityProviding {
 /// project, so its user id can never match the production account binding
 /// (`ub`) a release Mac stamps into its pairing QR — every prod QR fails the
 /// preflight before any route is dialed, even for the same email. The
-/// `AuthEnvironment` override still lets a DEV build test production account
-/// behavior, but the separate build policy does not let it connect to an
-/// official Mac. These tests pin only the auth override to its configuration.
+/// `AuthEnvironment` override lets a DEV build test production account behavior
+/// and connect to official Mac builds without weakening exact-tag isolation for
+/// ordinary development-auth builds.
 @MainActor
 @Suite struct MobileAuthEnvironmentOverrideTests {
     /// The production Stack project id (`CmuxAuthRuntime.AuthConfig`).
@@ -85,6 +85,24 @@ private struct OfflineReachabilityStub: ReachabilityProviding {
         let composition = try makeComposition(bundle: bundle)
 
         #expect(composition.authEnvironment == .production)
+    }
+
+    @Test func productionAuthUsesOfficialMacCompatibility() throws {
+        let bundle = try fixtureBundle(localConfig: ["AuthEnvironment": "production"])
+        let composition = try makeComposition(bundle: bundle)
+
+        #expect(composition.macBuildCompatibilityPolicy(
+            buildScope: MobileIOSBuildScope("sidebar-left")
+        ) == .official)
+    }
+
+    @Test func developmentAuthKeepsExactTagMacCompatibility() throws {
+        let bundle = try fixtureBundle(localConfig: ["AuthEnvironment": "development"])
+        let composition = try makeComposition(bundle: bundle)
+
+        #expect(composition.macBuildCompatibilityPolicy(
+            buildScope: MobileIOSBuildScope("sidebar-left")
+        ) == .development(expectedInstanceTag: "sidebar-left"))
     }
 
     // MARK: - Pure environment resolution
