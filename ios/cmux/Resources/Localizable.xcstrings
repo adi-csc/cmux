@@ -10125,13 +10125,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Opens the task composer."
+            "value": "Opens the new agent launcher."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "タスク作成画面を開きます。"
+            "value": "エージェント作成画面を開きます。"
           }
         }
       }
@@ -10142,13 +10142,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "New Task"
+            "value": "New Agent"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "新規タスク"
+            "value": "新規エージェント"
           }
         }
       }
@@ -10159,13 +10159,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "New task"
+            "value": "New agent"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "新しいタスク"
+            "value": "新しいエージェント"
           }
         }
       }

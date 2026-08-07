@@ -172,6 +172,7 @@ struct WorkspaceShellView: View {
     @State private var pendingPrimarySearchWorkspaceNavigationID: MobileWorkspacePreview.ID?
     @State private var pendingPrimarySearchNotificationNavigationID: MobileWorkspacePreview.ID?
     @State private var showingRootSettings = false
+    @State private var showingActivity = false
     @State private var settingsPairingScannerHandoff = SettingsPairingScannerHandoff()
     @State private var showingRootDeviceTree = false
     @State private var rootToolbarMachineSnapshots: WorkspaceMachineSnapshots?
@@ -225,116 +226,11 @@ struct WorkspaceShellView: View {
         let presentation = workspaceShellRenderPresentation
         let toolbarRenderContext = rootToolbarRenderContext(for: presentation)
         GeometryReader { geometry in
-            MobilePrimaryTabScaffold(
-                selection: $selectedPrimaryTab,
-                searchCoordinator: primarySearchCoordinator,
-                agentAttentionCount: agentAttentionCount,
-                notificationUnreadCount: presentation.notificationUnreadCount,
-                taskComposerAction: usesCompactStack && !compactNavigationPath.isEmpty
-                    ? nil
-                    : taskComposerAction
-            ) {
-                AgentRemoteControlView(
-                    store: store,
-                    openWorkspace: openWorkspaceFromAgentControl,
-                    attentionCountChanged: { agentAttentionCount = $0 }
-                )
-            } workspaces: {
-                workspaceTabContent(
-                    canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
-                )
-            } notifications: {
-                NavigationStack(path: $notificationNavigationPath) {
-                    NotificationFeedStoreView(
-                        store: store,
-                        items: presentation.notificationFeedItems,
-                        status: presentation.notificationFeedStatus,
-                        projection: notificationFeedProjection,
-                        selectedMacDeviceIDs: presentation.selectedNotificationFeedMacDeviceIDs
-                    )
-                        .toolbar {
-                            if notificationNavigationPath.isEmpty {
-                                rootToolbarContent
-                            }
-                        }
-                        .navigationDestination(for: MobileWorkspacePreview.ID.self) { workspaceID in
-                            workspaceDestination(
-                                for: workspaceID,
-                                createWorkspace: createWorkspaceInCompactStack,
-                                canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
-                            )
-                            .toolbarVisibility(.hidden, for: .tabBar)
-                    }
-                }
-                .onAppear {
-                    consumePendingPrimarySearchNavigation(for: .notifications)
-                }
-                .onChange(of: pendingPrimarySearchNotificationNavigationID) { _, _ in
-                    consumePendingPrimarySearchNavigation(for: .notifications)
-                }
-            } workspaceSearch: {
-                workspaceSearchTabContent(
-                    canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
-                )
-            } notificationSearch: {
-                notificationSearchTabContent(presentation: presentation)
-            }
-            .background {
-                NotificationFeedSearchProjectionSync(
-                    searchCoordinator: primarySearchCoordinator,
-                    projection: notificationFeedProjection
-                )
-            }
-            .environment(\.workspaceRootToolbarContentWidth, geometry.size.width)
-            .environment(\.workspaceRootToolbarRenderContext, toolbarRenderContext)
-            .onChange(of: primarySearchCoordinator.isPresented) { _, isPresented in
-                guard !isPresented else { return }
-                consumePendingPrimarySearchNavigation(for: selectedPrimaryTab)
-            }
-            .onChange(of: selectedPrimaryTab) { oldValue, newValue in
-                if oldValue == .search, newValue != .search {
-                    notificationSearchNavigationPath = []
-                }
-            }
-            .onChange(of: store.deeplinkWorkspaceNavigationRequest) { _, request in
-                guard request != nil else { return }
-                consumeDeeplinkNavigationRequestIfNeeded()
-            }
-            .onAppear {
-                updateRootToolbarMachineSnapshots(presentation.toolbarMachineSnapshots)
-                consumeDeeplinkNavigationRequestIfNeeded()
-            }
-            .onChange(of: presentation.toolbarMachineSnapshots) { _, snapshots in
-                updateRootToolbarMachineSnapshots(snapshots)
-            }
-            .onChange(of: presentation.notificationFeedItems, initial: true) { _, items in
-                notificationFeedProjection.update(items: items)
-            }
-            .sheet(isPresented: $showingRootSettings, onDismiss: {
-                settingsPairingScannerHandoff.settingsDidDismiss(startScanner: showPairingScanner)
-            }) {
-                MobileSettingsView(
-                    connectedHostName: store.connectedHostName,
-                    startPairingScanner: {
-                        settingsPairingScannerHandoff.requestScannerAfterDismiss(
-                            isSettingsPresented: $showingRootSettings
-                        )
-                    },
-                    signOut: signOut,
-                    store: store
-                )
-            }
-            .sheet(isPresented: $showingRootDeviceTree) {
-                DeviceTreeView(
-                    store: store,
-                    selectWorkspace: { id in
-                        transitionPrimaryTab(to: .workspaces) {
-                            selectWorkspace(id)
-                        }
-                    },
-                    showAddDevice: showAddDevice
-                )
-            }
+            mobileRootPresentedContent(
+                presentation: presentation,
+                toolbarRenderContext: toolbarRenderContext,
+                contentWidth: geometry.size.width
+            )
         }
         #else
         workspaceTabContent(canCreateWorkspaceForSelection: canCreateWorkspaceForMacSelection)
@@ -343,6 +239,131 @@ struct WorkspaceShellView: View {
         }
         #endif
     }
+
+    #if os(iOS)
+    private var compactTaskComposerAction: (() -> Void)? {
+        guard !usesCompactStack || compactNavigationPath.isEmpty else { return nil }
+        return { openTaskComposer() }
+    }
+
+    private func mobilePrimaryTabContent(
+        presentation: WorkspaceShellRenderPresentation
+    ) -> some View {
+        MobilePrimaryTabScaffold(
+            selection: $selectedPrimaryTab,
+            searchCoordinator: primarySearchCoordinator,
+            agentAttentionCount: agentAttentionCount,
+            notificationUnreadCount: presentation.notificationUnreadCount,
+            showsNotificationsTab: false,
+            taskComposerAction: compactTaskComposerAction
+        ) {
+            AnyView(AgentRemoteControlView(
+                store: store,
+                openWorkspace: openWorkspaceFromAgentControl,
+                openActivity: { showingActivity = true },
+                activityUnreadCount: presentation.notificationUnreadCount,
+                attentionCountChanged: { agentAttentionCount = $0 }
+            ))
+        } workspaces: {
+            AnyView(workspaceTabContent(
+                canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
+            ))
+        } notifications: {
+            AnyView(notificationTabContent(presentation: presentation))
+        } workspaceSearch: {
+            AnyView(workspaceSearchTabContent(
+                canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
+            ))
+        } notificationSearch: {
+            AnyView(notificationSearchTabContent(presentation: presentation))
+        }
+    }
+
+    private func mobileRootObservedContent(
+        presentation: WorkspaceShellRenderPresentation,
+        toolbarRenderContext: WorkspaceRootToolbarRenderContext,
+        contentWidth: CGFloat
+    ) -> some View {
+        ZStack {
+            mobilePrimaryTabContent(presentation: presentation)
+            NotificationFeedSearchProjectionSync(
+                searchCoordinator: primarySearchCoordinator,
+                projection: notificationFeedProjection
+            )
+        }
+        .environment(\.workspaceRootToolbarContentWidth, contentWidth)
+        .environment(\.workspaceRootToolbarRenderContext, toolbarRenderContext)
+        .onChange(of: primarySearchCoordinator.isPresented) { _, isPresented in
+            guard !isPresented else { return }
+            consumePendingPrimarySearchNavigation(for: selectedPrimaryTab)
+        }
+        .onChange(of: selectedPrimaryTab) { oldValue, newValue in
+            if oldValue == .search, newValue != .search {
+                notificationSearchNavigationPath = []
+            }
+        }
+        .onChange(of: store.deeplinkWorkspaceNavigationRequest) { _, request in
+            guard request != nil else { return }
+            consumeDeeplinkNavigationRequestIfNeeded()
+        }
+        .onAppear {
+            updateRootToolbarMachineSnapshots(presentation.toolbarMachineSnapshots)
+            consumeDeeplinkNavigationRequestIfNeeded()
+        }
+        .onChange(of: presentation.toolbarMachineSnapshots) { _, snapshots in
+            updateRootToolbarMachineSnapshots(snapshots)
+        }
+        .onChange(of: presentation.notificationFeedItems, initial: true) { _, items in
+            notificationFeedProjection.update(items: items)
+        }
+    }
+
+    private func mobileRootPresentedContent(
+        presentation: WorkspaceShellRenderPresentation,
+        toolbarRenderContext: WorkspaceRootToolbarRenderContext,
+        contentWidth: CGFloat
+    ) -> some View {
+        mobileRootObservedContent(
+            presentation: presentation,
+            toolbarRenderContext: toolbarRenderContext,
+            contentWidth: contentWidth
+        )
+        .sheet(isPresented: $showingRootSettings, onDismiss: {
+            settingsPairingScannerHandoff.settingsDidDismiss(startScanner: showPairingScanner)
+        }) {
+            MobileSettingsView(
+                connectedHostName: store.connectedHostName,
+                startPairingScanner: {
+                    settingsPairingScannerHandoff.requestScannerAfterDismiss(
+                        isSettingsPresented: $showingRootSettings
+                    )
+                },
+                signOut: signOut,
+                store: store
+            )
+        }
+        .sheet(isPresented: $showingRootDeviceTree) {
+            DeviceTreeView(
+                store: store,
+                selectWorkspace: { id in
+                    transitionPrimaryTab(to: .workspaces) {
+                        selectWorkspace(id)
+                    }
+                },
+                showAddDevice: showAddDevice
+            )
+        }
+        .sheet(isPresented: $showingActivity) {
+            activitySheetContent(presentation: presentation)
+        }
+        .sheet(isPresented: $isTaskComposerPresented) {
+            TaskComposerSheet(
+                store: store,
+                submitTaskComposer: submitTaskComposerFromShell
+            )
+        }
+    }
+    #endif
 
     private func workspaceTabContent(canCreateWorkspaceForSelection: Bool) -> some View {
         workspaceActionToastOverlay {
@@ -424,6 +445,68 @@ struct WorkspaceShellView: View {
         }
     }
 
+    private func notificationTabContent(
+        presentation: WorkspaceShellRenderPresentation
+    ) -> some View {
+        NavigationStack(path: $notificationNavigationPath) {
+            NotificationFeedStoreView(
+                store: store,
+                items: presentation.notificationFeedItems,
+                status: presentation.notificationFeedStatus,
+                projection: notificationFeedProjection,
+                selectedMacDeviceIDs: presentation.selectedNotificationFeedMacDeviceIDs
+            )
+            .toolbar {
+                if notificationNavigationPath.isEmpty {
+                    rootToolbarContent
+                }
+            }
+            .navigationDestination(for: MobileWorkspacePreview.ID.self) { workspaceID in
+                workspaceDestination(
+                    for: workspaceID,
+                    createWorkspace: createWorkspaceInCompactStack,
+                    canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
+                )
+                .toolbarVisibility(.hidden, for: .tabBar)
+            }
+        }
+        .onAppear {
+            consumePendingPrimarySearchNavigation(for: .notifications)
+        }
+        .onChange(of: pendingPrimarySearchNotificationNavigationID) { _, _ in
+            consumePendingPrimarySearchNavigation(for: .notifications)
+        }
+    }
+
+    private func activitySheetContent(
+        presentation: WorkspaceShellRenderPresentation
+    ) -> some View {
+        NavigationStack(path: $notificationNavigationPath) {
+            NotificationFeedStoreView(
+                store: store,
+                items: presentation.notificationFeedItems,
+                status: presentation.notificationFeedStatus,
+                projection: notificationFeedProjection,
+                selectedMacDeviceIDs: presentation.selectedNotificationFeedMacDeviceIDs
+            )
+            .navigationTitle("Activity")
+            .toolbar {
+                if notificationNavigationPath.isEmpty {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showingActivity = false }
+                    }
+                }
+            }
+            .navigationDestination(for: MobileWorkspacePreview.ID.self) { workspaceID in
+                workspaceDestination(
+                    for: workspaceID,
+                    createWorkspace: createWorkspaceInCompactStack,
+                    canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
+                )
+            }
+        }
+    }
+
     private func layoutContent(canCreateWorkspaceForSelection: Bool) -> some View {
         Group {
             if usesCompactStack {
@@ -438,14 +521,6 @@ struct WorkspaceShellView: View {
             }
             compactNavigationPath = [selectedWorkspaceID]
         }
-        #if os(iOS)
-        .sheet(isPresented: $isTaskComposerPresented) {
-            TaskComposerSheet(
-                store: store,
-                submitTaskComposer: submitTaskComposerFromShell
-            )
-        }
-        #endif
         .accessibilityIdentifier("MobileWorkspaceShell")
     }
 
@@ -824,6 +899,12 @@ struct WorkspaceShellView: View {
         guard let workspaceID = store.consumeDeeplinkWorkspaceNavigationRequest() else { return }
         #if os(iOS)
         if request.origin == .notificationFeed {
+            if showingActivity {
+                if notificationNavigationPath.last != workspaceID {
+                    notificationNavigationPath = [workspaceID]
+                }
+                return
+            }
             switch primarySearchCoordinator.notificationFeedNavigationRoute(
                 selectedTab: selectedPrimaryTab
             ) {
@@ -832,13 +913,15 @@ struct WorkspaceShellView: View {
                     notificationSearchNavigationPath = [workspaceID]
                 }
             case .notificationTabAfterSearchDismissal:
-                pendingPrimarySearchNotificationNavigationID = workspaceID
-                transitionPrimaryTab(to: .notifications)
+                primarySearchCoordinator.deactivateCurrentSearch()
+                notificationSearchNavigationPath = []
+                notificationNavigationPath = [workspaceID]
+                showingActivity = true
             case .mountedNotificationTab:
-                transitionPrimaryTab(to: .notifications)
                 if notificationNavigationPath.last != workspaceID {
                     notificationNavigationPath = [workspaceID]
                 }
+                showingActivity = true
             }
             return
         }

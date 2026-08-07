@@ -8,7 +8,7 @@ struct TaskComposerButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "square.and.pencil")
+            Image(systemName: "plus")
                 .font(.system(size: 22, weight: .semibold))
                 .frame(width: diameter, height: diameter)
                 .contentShape(Circle())
@@ -16,9 +16,9 @@ struct TaskComposerButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
         .mobileGlassPill()
-        .accessibilityLabel(L10n.string("mobile.taskComposer.button.accessibilityLabel", defaultValue: "New Task"))
+        .accessibilityLabel(L10n.string("mobile.taskComposer.button.accessibilityLabel", defaultValue: "New Agent"))
         .accessibilityHint(
-            L10n.string("mobile.taskComposer.button.accessibilityHint", defaultValue: "Opens the task composer.")
+            L10n.string("mobile.taskComposer.button.accessibilityHint", defaultValue: "Opens the new agent launcher.")
         )
         .accessibilityIdentifier("MobileTaskComposerButton")
     }

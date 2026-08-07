@@ -16,6 +16,7 @@ struct MobilePrimaryTabScaffold<
     @Bindable var searchCoordinator: MobilePrimarySearchCoordinator
     let agentAttentionCount: Int
     let notificationUnreadCount: Int
+    let showsNotificationsTab: Bool
     let taskComposerAction: (() -> Void)?
     let agents: Agents
     let workspaces: Workspaces
@@ -28,6 +29,7 @@ struct MobilePrimaryTabScaffold<
         searchCoordinator: MobilePrimarySearchCoordinator,
         agentAttentionCount: Int = 0,
         notificationUnreadCount: Int,
+        showsNotificationsTab: Bool = true,
         taskComposerAction: (() -> Void)? = nil,
         @ViewBuilder agents: () -> Agents,
         @ViewBuilder workspaces: () -> Workspaces,
@@ -39,6 +41,7 @@ struct MobilePrimaryTabScaffold<
         self.searchCoordinator = searchCoordinator
         self.agentAttentionCount = agentAttentionCount
         self.notificationUnreadCount = notificationUnreadCount
+        self.showsNotificationsTab = showsNotificationsTab
         self.taskComposerAction = taskComposerAction
         self.agents = agents()
         self.workspaces = workspaces()
@@ -207,16 +210,18 @@ struct MobilePrimaryTabScaffold<
             .accessibilityIdentifier("MobilePrimaryTabWorkspaces")
         }
 
-        Tab(value: MobilePrimaryTab.notifications) {
-            notifications
-        } label: {
-            Label(
-                L10n.string("mobile.tabs.notifications", defaultValue: "Notifications"),
-                systemImage: "bell"
-            )
-            .accessibilityIdentifier("MobilePrimaryTabNotifications")
+        if showsNotificationsTab {
+            Tab(value: MobilePrimaryTab.notifications) {
+                notifications
+            } label: {
+                Label(
+                    L10n.string("mobile.tabs.notifications", defaultValue: "Notifications"),
+                    systemImage: "bell"
+                )
+                .accessibilityIdentifier("MobilePrimaryTabNotifications")
+            }
+            .badge(notificationUnreadCount)
         }
-        .badge(notificationUnreadCount)
     }
 }
 

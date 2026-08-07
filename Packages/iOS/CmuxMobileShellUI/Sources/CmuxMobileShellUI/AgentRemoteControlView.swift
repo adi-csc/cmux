@@ -11,6 +11,8 @@ import SwiftUI
 struct AgentRemoteControlView: View {
     @Bindable var store: CMUXMobileShellStore
     let openWorkspace: (_ workspaceID: String, _ terminalID: String?) -> Void
+    let openActivity: () -> Void
+    let activityUnreadCount: Int
     let attentionCountChanged: (Int) -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -29,11 +31,21 @@ struct AgentRemoteControlView: View {
                 }
             }
             .navigationTitle("Agents")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: openActivity) {
+                        Image(systemName: activityUnreadCount > 0 ? "bell.badge.fill" : "bell")
+                    }
+                    .accessibilityLabel("Activity")
+                    .accessibilityValue(activityUnreadCount > 0 ? "\(activityUnreadCount) unread" : "No unread activity")
+                }
+            }
             .navigationDestination(for: AgentRemoteRoute.self) { destination in
                 if let session = sessions.first(where: { $0.id == destination.sessionID }) {
                     AgentRemoteConversationView(
                         session: session,
                         store: store,
+                        title: displayName(for: session),
                         workspaceName: workspaceName(for: session),
                         openWorkspace: openWorkspace
                     )
@@ -81,7 +93,7 @@ struct AgentRemoteControlView: View {
             NavigationLink(value: AgentRemoteRoute(sessionID: session.id)) {
                 AgentRemoteSessionRow(
                     session: session,
-                    workspaceName: workspaceName(for: session),
+                    title: displayName(for: session),
                     directoryName: directoryName(for: session)
                 )
             }
@@ -164,6 +176,20 @@ struct AgentRemoteControlView: View {
         }?.name ?? "Workspace"
     }
 
+    /// Prefer the name the user gave the cmux workspace over generic producer
+    /// labels such as "Codex Session" or "Claude Session".
+    private func displayName(for session: ChatSessionDescriptor) -> String {
+        let workspaceName = workspaceName(for: session)
+        if workspaceName != "Workspace", workspaceName != "Unknown workspace" {
+            return workspaceName
+        }
+        if let path = session.workingDirectory, !path.isEmpty {
+            let directory = URL(fileURLWithPath: path).lastPathComponent
+            if !directory.isEmpty { return directory }
+        }
+        return session.title.nonempty ?? session.agentKind.displayName
+    }
+
     private func directoryName(for session: ChatSessionDescriptor) -> String? {
         guard let path = session.workingDirectory, !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: path)
@@ -243,6 +269,7 @@ struct AgentRemoteControlView: View {
 private struct AgentRemoteConversationView: View {
     let session: ChatSessionDescriptor
     @Bindable var store: CMUXMobileShellStore
+    let title: String
     let workspaceName: String
     let openWorkspace: (_ workspaceID: String, _ terminalID: String?) -> Void
 
@@ -273,15 +300,15 @@ private struct AgentRemoteConversationView: View {
                 ProgressView("Loading conversation…")
             }
         }
-        .navigationTitle(session.title.nonempty ?? session.agentKind.displayName)
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
-                    Text(session.title.nonempty ?? session.agentKind.displayName)
+                    Text(title)
                         .font(.headline)
                         .lineLimit(1)
-                    Text("\(session.agentKind.displayName) · \(workspaceName)")
+                    Text(conversationSubtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -306,6 +333,15 @@ private struct AgentRemoteConversationView: View {
         let foreground = scenePhase == .active ? 1 : 0
         let connected = store.connectionState == .connected ? 1 : 0
         return "\(session.id)#\(session.version)#\(store.agentChatEventSourceIdentity)#\(connected)#\(foreground)"
+    }
+
+    private var conversationSubtitle: String {
+        guard title != workspaceName,
+              workspaceName != "Workspace",
+              workspaceName != "Unknown workspace" else {
+            return session.agentKind.displayName
+        }
+        return "\(session.agentKind.displayName) · \(workspaceName)"
     }
 
     private func runConversation() async {
@@ -350,18 +386,18 @@ private struct AgentRemoteConversationView: View {
 
 private struct AgentRemoteSessionRow: View {
     let session: ChatSessionDescriptor
-    let workspaceName: String
+    let title: String
     let directoryName: String?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             AgentRemoteStateDot(state: session.state)
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.title.nonempty ?? "\(session.agentKind.displayName) session")
+                Text(title)
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                 HStack(spacing: 5) {
-                    Text(workspaceName)
+                    Text(session.agentKind.displayName)
                     if let directoryName {
                         Text("·")
                         Text(directoryName)
