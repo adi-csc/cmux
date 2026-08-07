@@ -34,10 +34,11 @@ extension ReconnectRouteSelectionTests {
         #expect(attemptedKinds.allSatisfy { $0 == .iroh })
     }
 
-    @Test func recoveryWaitsForOldPhysicalTransportBeforeRedialing() async throws {
+    @Test func recoveryBoundsOldPhysicalTransportDrainBeforeRedialing() async throws {
         let closeGate = LivenessTransportCloseGate()
         let fixture = try await makeRecoveryOwnerFixture(
-            firstTransportCloseGate: closeGate
+            firstTransportCloseGate: closeGate,
+            connectionHandoffDrainTimeoutNanoseconds: 10_000_000
         )
         defer {
             Task { await closeGate.release() }
@@ -56,7 +57,9 @@ extension ReconnectRouteSelectionTests {
         #expect(await closeGate.waitUntilCloseStarted())
         #expect(fixture.factory.attemptedKinds() == [.iroh])
 
-        await closeGate.release()
+        // A stale transport close may outlive the foreground handoff. Once the
+        // bounded wait expires, the registry keeps owning that cleanup while
+        // allowing exactly one replacement dial.
         #expect(await fixture.factory.waitForAttemptCount(2))
         #expect(try await pollUntil {
             guard let replacement = fixture.store.remoteClient else { return false }
@@ -64,6 +67,7 @@ extension ReconnectRouteSelectionTests {
                 && fixture.store.connectionState == .connected
         })
         #expect(fixture.factory.attemptedKinds() == [.iroh, .iroh])
+        await closeGate.release()
     }
 
     @Test func livenessAndForegroundRecoveryCoalesceOnOneIrohReplacement() async throws {
@@ -560,7 +564,8 @@ extension ReconnectRouteSelectionTests {
     private func makeRecoveryOwnerFixture(
         backup: (any PairedMacBackingUp)? = nil,
         heldConnectAttempts: Set<Int> = [],
-        firstTransportCloseGate: LivenessTransportCloseGate? = nil
+        firstTransportCloseGate: LivenessTransportCloseGate? = nil,
+        connectionHandoffDrainTimeoutNanoseconds: UInt64 = 3_000_000_000
     ) async throws -> RecoveryOwnerFixture {
         let clock = TestClock()
         let router = LivenessHostRouter()
@@ -599,7 +604,9 @@ extension ReconnectRouteSelectionTests {
             identityProvider: StaticIdentityProvider(userID: "user-1"),
             reachability: AlwaysOnlineReachability(),
             pairingHintDefaults: UserDefaults(suiteName: "iroh-recovery-owner-\(UUID().uuidString)")!,
-            diagnosticLog: diagnosticLog
+            diagnosticLog: diagnosticLog,
+            connectionHandoffDrainTimeoutNanoseconds:
+                connectionHandoffDrainTimeoutNanoseconds
         )
         return RecoveryOwnerFixture(
             store: store,

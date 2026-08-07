@@ -300,13 +300,32 @@ extension MobileShellComposite {
                         "connection.recovery waiting for physical transport drain "
                             + "attempt=\(attempt.id.uuidString)"
                     )
-                    await expectedClient.disconnectAndWaitForTransportDrain()
+                    // A dead Iroh connection can take tens of seconds to
+                    // finish closing its event lane. Do not add that entire
+                    // tail to the user-visible recovery outage. The RPC
+                    // registry retains the exact physical-cleanup lease and
+                    // permits one replacement dial while it drains, so bound
+                    // only this foreground wait to the same budget used by
+                    // focused/control connection handoffs.
+                    let drain = await Self.raceAgainstDeadline(
+                        nanoseconds: self.connectionHandoffDrainTimeoutNanoseconds
+                    ) {
+                        await expectedClient.disconnectAndWaitForTransportDrain()
+                        return true
+                    }
                     guard !Task.isCancelled,
                           self.connectionRecoveryOwner.isCurrent(attempt) else { return }
-                    MobileDebugLog.anchormux(
-                        "connection.recovery physical transport drained "
-                            + "attempt=\(attempt.id.uuidString)"
-                    )
+                    if drain.value == true {
+                        MobileDebugLog.anchormux(
+                            "connection.recovery physical transport drained "
+                                + "attempt=\(attempt.id.uuidString)"
+                        )
+                    } else {
+                        MobileDebugLog.anchormux(
+                            "connection.recovery physical transport drain deferred "
+                                + "attempt=\(attempt.id.uuidString)"
+                        )
+                    }
                 }
                 if self.connectionState == .connected {
                     self.connectionState = .disconnected
