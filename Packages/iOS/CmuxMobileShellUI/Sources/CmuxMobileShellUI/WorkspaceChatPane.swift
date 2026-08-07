@@ -21,6 +21,7 @@ struct WorkspaceChatPane: View {
     @Binding var draft: String
     /// Flips chat mode off (the toggle's "back to terminal" path).
     let onExitChat: () -> Void
+    var presentation: ChatPresentation = .standard
 
     @Environment(BrowserSurfaceStore.self) private var browserStore
 
@@ -38,6 +39,7 @@ struct WorkspaceChatPane: View {
                 accessoryShortcuts: chatAccessoryShortcuts(for: conversation),
                 providesOwnChrome: false,
                 runsStoreTask: false,
+                presentation: presentation,
                 onOpenTerminal: openTerminal
             )
             .environment(\.chatArtifactLoader, artifactLoader)

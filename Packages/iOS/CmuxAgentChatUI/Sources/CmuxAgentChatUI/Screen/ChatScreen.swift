@@ -7,6 +7,15 @@ import Accessibility
 import UIKit
 #endif
 
+/// Controls how much host chrome the conversation composer exposes.
+///
+/// Remote control keeps the rich transcript and artifact experience while
+/// reducing the composer to the few controls useful from a phone.
+public enum ChatPresentation: Equatable, Sendable {
+    case standard
+    case remoteControl
+}
+
 /// The full conversation surface: header state, transcript, typing
 /// indicator, and the keyboard-attached composer.
 ///
@@ -28,6 +37,7 @@ public struct ChatScreen: View {
     private let onOpenTerminal: () -> Void
     private let providesOwnChrome: Bool
     private let runsStoreTask: Bool
+    private let presentation: ChatPresentation
 
     /// Creates the screen.
     ///
@@ -56,6 +66,7 @@ public struct ChatScreen: View {
         accessoryShortcuts: [ChatAccessoryShortcut] = [],
         providesOwnChrome: Bool = true,
         runsStoreTask: Bool = true,
+        presentation: ChatPresentation = .standard,
         onOpenTerminal: @escaping () -> Void
     ) {
         _store = State(initialValue: store)
@@ -64,6 +75,7 @@ public struct ChatScreen: View {
         self.accessoryShortcuts = accessoryShortcuts
         self.providesOwnChrome = providesOwnChrome
         self.runsStoreTask = runsStoreTask
+        self.presentation = presentation
         self.onOpenTerminal = onOpenTerminal
     }
 
@@ -214,6 +226,7 @@ public struct ChatScreen: View {
                 isConnected: store.isConnected,
                 accessoryLeadingShortcuts: accessoryLeadingShortcuts,
                 accessoryShortcuts: accessoryShortcuts,
+                presentation: presentation,
                 draft: $draft,
                 onSend: { text, attachments in
                     Task { await store.send(text: text, attachments: attachments) }

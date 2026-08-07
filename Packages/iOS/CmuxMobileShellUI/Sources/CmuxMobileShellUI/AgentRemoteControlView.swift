@@ -46,17 +46,6 @@ struct AgentRemoteControlView: View {
                     )
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        refreshGeneration &+= 1
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .accessibilityLabel("Refresh agents")
-                    .disabled(status == .loading)
-                }
-            }
         }
         .task(id: feedKey) { await runSessionFeed() }
         .onChange(of: attentionCount, initial: true) { _, count in
@@ -66,32 +55,13 @@ struct AgentRemoteControlView: View {
 
     private var sessionList: some View {
         List {
-            Section {
-                AgentRemoteSummaryCard(
-                    attentionCount: attentionCount,
-                    workingCount: workingSessions.count,
-                    worktreeCount: activeWorktreeCount,
-                    status: status
-                )
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowBackground(Color.clear)
+            if status != .connected {
+                AgentRemoteConnectionRow(status: status)
             }
 
-            if !attentionSessions.isEmpty {
-                Section("Needs you") {
-                    rows(attentionSessions)
-                }
-            }
-
-            if !workingSessions.isEmpty {
-                Section("Working") {
-                    rows(workingSessions)
-                }
-            }
-
-            if !readySessions.isEmpty {
-                Section("Ready") {
-                    rows(readySessions)
+            if !activeSessions.isEmpty {
+                Section {
+                    rows(activeSessions)
                 }
             }
 
@@ -101,7 +71,7 @@ struct AgentRemoteControlView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
         .refreshable { await refreshSnapshot() }
     }
 
@@ -123,11 +93,6 @@ struct AgentRemoteControlView: View {
             Label(emptyTitle, systemImage: emptySymbol)
         } description: {
             Text(emptyDescription)
-        } actions: {
-            if status != .loading {
-                Button("Refresh") { refreshGeneration &+= 1 }
-                    .buttonStyle(.borderedProminent)
-            }
         }
     }
 
@@ -158,7 +123,7 @@ struct AgentRemoteControlView: View {
     }
 
     private var feedKey: String {
-        let foreground = scenePhase == .background ? 0 : 1
+        let foreground = scenePhase == .active ? 1 : 0
         let connected = store.connectionState == .connected ? 1 : 0
         return "\(store.agentChatEventSourceIdentity)#\(connected)#\(foreground)#\(refreshGeneration)"
     }
@@ -171,18 +136,13 @@ struct AgentRemoteControlView: View {
         sorted(visibleSessions.filter { $0.state.needsAttention })
     }
 
-    private var workingSessions: [ChatSessionDescriptor] {
-        sorted(visibleSessions.filter {
-            if case .working = $0.state { return true }
-            return false
-        })
-    }
-
-    private var readySessions: [ChatSessionDescriptor] {
-        sorted(visibleSessions.filter {
-            if case .idle = $0.state { return true }
-            return false
-        })
+    private var activeSessions: [ChatSessionDescriptor] {
+        visibleSessions.filter { $0.state != .ended }.sorted {
+            if $0.state.needsAttention != $1.state.needsAttention {
+                return $0.state.needsAttention
+            }
+            return ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast)
+        }
     }
 
     private var recentSessions: [ChatSessionDescriptor] {
@@ -190,13 +150,6 @@ struct AgentRemoteControlView: View {
     }
 
     private var attentionCount: Int { attentionSessions.count }
-
-    private var activeWorktreeCount: Int {
-        Set<String>(visibleSessions.compactMap { session -> String? in
-            guard session.state != .ended else { return nil }
-            return session.workingDirectory ?? session.workspaceID
-        }).count
-    }
 
     private func sorted(_ sessions: [ChatSessionDescriptor]) -> [ChatSessionDescriptor] {
         sessions.sorted {
@@ -219,36 +172,63 @@ struct AgentRemoteControlView: View {
     }
 
     private func runSessionFeed() async {
-        guard scenePhase != .background else { return }
-        guard let source = store.makeChatEventSource() else {
-            status = .reconnecting
-            return
-        }
+        guard scenePhase == .active else { return }
+        if sessions.isEmpty { status = .loading }
+        var failureCount = 0
 
-        status = .loading
-        var reducer = ChatSessionListReducer(workspaceID: nil)
-        let stream = await source.sessionEvents()
-        do {
-            sessions = try await source.sessions(workspaceID: nil)
-            status = .connected
-        } catch {
-            status = store.chatSessionListFailureMeansUnsupported(error) ? .unsupported : .reconnecting
-        }
-
-        for await frame in stream {
-            guard !Task.isCancelled else { break }
-            let next = reducer.applying(frame, to: sessions)
-            if next != sessions {
-                withAnimation(.snappy(duration: 0.22)) { sessions = next }
+        while !Task.isCancelled, scenePhase == .active {
+            guard let source = store.makeChatEventSource() else {
+                status = .reconnecting
+                await store.reconnectOrRefresh()
+                failureCount += 1
+                await pauseBeforeRetry(failureCount: failureCount)
+                continue
             }
-            status = .connected
+
+            let stream = await source.sessionEvents()
+            do {
+                sessions = try await source.sessions(workspaceID: nil)
+                status = .connected
+                failureCount = 0
+            } catch {
+                if store.chatSessionListFailureMeansUnsupported(error) {
+                    status = .unsupported
+                    return
+                }
+                status = .reconnecting
+                failureCount += 1
+                await pauseBeforeRetry(failureCount: failureCount)
+                continue
+            }
+
+            var reducer = ChatSessionListReducer(workspaceID: nil)
+            for await frame in stream {
+                guard !Task.isCancelled else { return }
+                let next = reducer.applying(frame, to: sessions)
+                if next != sessions {
+                    withAnimation(.snappy(duration: 0.22)) { sessions = next }
+                }
+                status = .connected
+                failureCount = 0
+            }
+            guard !Task.isCancelled else { return }
+            status = .reconnecting
+            failureCount += 1
+            await pauseBeforeRetry(failureCount: failureCount)
         }
-        if !Task.isCancelled { status = .reconnecting }
+    }
+
+    private func pauseBeforeRetry(failureCount: Int) async {
+        let milliseconds = AgentRemoteReconnectPolicy.delayMilliseconds(
+            afterFailureCount: failureCount
+        )
+        try? await Task.sleep(for: .milliseconds(milliseconds))
     }
 
     private func refreshSnapshot() async {
         guard let source = store.makeChatEventSource() else {
             status = .reconnecting
+            await store.reconnectOrRefresh()
             return
         }
         do {
@@ -266,6 +246,7 @@ private struct AgentRemoteConversationView: View {
     let workspaceName: String
     let openWorkspace: (_ workspaceID: String, _ terminalID: String?) -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var conversation: ChatConversationStore?
     @State private var draft = ""
     @State private var isUnavailable = false
@@ -278,14 +259,16 @@ private struct AgentRemoteConversationView: View {
                     conversation: conversation,
                     store: store,
                     draft: $draft,
-                    onExitChat: openTerminal
+                    onExitChat: openTerminal,
+                    presentation: .remoteControl
                 )
             } else if isUnavailable {
-                ContentUnavailableView(
-                    "Mac unavailable",
-                    systemImage: "wifi.slash",
-                    description: Text("Reconnect over Tailscale to continue this conversation.")
-                )
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Reconnecting to your Mac…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 ProgressView("Loading conversation…")
             }
@@ -293,32 +276,51 @@ private struct AgentRemoteConversationView: View {
         .navigationTitle(session.title.nonempty ?? session.agentKind.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: openTerminal) {
-                    Image(systemName: "terminal")
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 0) {
+                    Text(session.title.nonempty ?? session.agentKind.displayName)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text("\(session.agentKind.displayName) · \(workspaceName)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .accessibilityLabel("Open terminal")
-                .disabled(session.workspaceID == nil)
             }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            AgentRemoteConversationContext(
-                session: session,
-                workspaceName: workspaceName
-            )
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(action: openTerminal) {
+                        Label("Open terminal", systemImage: "terminal")
+                    }
+                    .disabled(session.workspaceID == nil)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("Conversation actions")
+            }
         }
         .task(id: conversationKey) { await runConversation() }
     }
 
     private var conversationKey: String {
-        "\(session.id)#\(session.version)#\(store.agentChatEventSourceIdentity)"
+        let foreground = scenePhase == .active ? 1 : 0
+        let connected = store.connectionState == .connected ? 1 : 0
+        return "\(session.id)#\(session.version)#\(store.agentChatEventSourceIdentity)#\(connected)#\(foreground)"
     }
 
     private func runConversation() async {
-        guard let source = store.makeChatEventSource() else {
+        guard scenePhase == .active else { return }
+        var source = store.makeChatEventSource()
+        while source == nil, !Task.isCancelled, scenePhase == .active {
             isUnavailable = true
-            return
+            await store.reconnectOrRefresh()
+            guard !Task.isCancelled else { return }
+            source = store.makeChatEventSource()
+            if source == nil {
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
+        guard let source, !Task.isCancelled else { return }
         isUnavailable = false
         let activeConversation: ChatConversationStore
         if let conversation {
@@ -352,23 +354,12 @@ private struct AgentRemoteSessionRow: View {
     let directoryName: String?
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(agentTint.opacity(0.14))
-                    .frame(width: 42, height: 42)
-                Image(systemName: agentSymbol)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(agentTint)
-            }
-
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            AgentRemoteStateDot(state: session.state)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(session.title.nonempty ?? "\(session.agentKind.displayName) session")
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    AgentRemoteStateDot(state: session.state)
-                }
+                Text(session.title.nonempty ?? "\(session.agentKind.displayName) session")
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
                 HStack(spacing: 5) {
                     Text(workspaceName)
                     if let directoryName {
@@ -391,85 +382,34 @@ private struct AgentRemoteSessionRow: View {
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
     }
-
-    private var agentSymbol: String {
-        session.agentKind == .codex ? "chevron.left.forwardslash.chevron.right" : "sparkles"
-    }
-
-    private var agentTint: Color {
-        session.agentKind == .codex ? .blue : .orange
-    }
 }
 
-private struct AgentRemoteSummaryCard: View {
-    let attentionCount: Int
-    let workingCount: Int
-    let worktreeCount: Int
+private struct AgentRemoteConnectionRow: View {
     let status: AgentRemoteFeedStatus
 
     var body: some View {
-        HStack(spacing: 0) {
-            metric(value: attentionCount, label: "Need you", tint: attentionCount > 0 ? .orange : .secondary)
-            Divider().frame(height: 34)
-            metric(value: workingCount, label: "Working", tint: .blue)
-            Divider().frame(height: 34)
-            metric(value: worktreeCount, label: "Worktrees", tint: .purple)
-        }
-        .padding(.vertical, 14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(alignment: .topTrailing) {
-            Circle()
-                .fill(status == .connected ? Color.green : Color.secondary)
-                .frame(width: 8, height: 8)
-                .padding(10)
-                .accessibilityLabel(status == .connected ? "Connected" : "Reconnecting")
-        }
-    }
-
-    private func metric(value: Int, label: String, tint: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(value.formatted())
-                .font(.title3.weight(.bold))
-                .foregroundStyle(tint)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private struct AgentRemoteConversationContext: View {
-    let session: ChatSessionDescriptor
-    let workspaceName: String
-
-    var body: some View {
         HStack(spacing: 8) {
-            AgentRemoteStateDot(state: session.state)
-            Text(session.agentKind.displayName)
-                .fontWeight(.semibold)
-            Text("in")
-                .foregroundStyle(.secondary)
-            Text(workspaceName)
-                .lineLimit(1)
+            if status == .unsupported {
+                Image(systemName: "exclamationmark.circle")
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(label)
+                .font(.caption)
             Spacer()
-            Text(stateLabel)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
         }
-        .font(.caption)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
+        .foregroundStyle(.secondary)
+        .listRowSeparator(.hidden)
+        .accessibilityElement(children: .combine)
     }
 
-    private var stateLabel: String {
-        switch session.state {
-        case .needsInput: "Needs input"
-        case .working: "Working"
-        case .idle: "Ready"
-        case .ended: "Ended"
+    private var label: String {
+        switch status {
+        case .loading: "Finding conversations…"
+        case .connected: "Connected"
+        case .reconnecting: "Reconnecting…"
+        case .unsupported: "Update cmux on your Mac"
         }
     }
 }
@@ -517,6 +457,13 @@ private enum AgentRemoteFeedStatus: Equatable {
     case connected
     case reconnecting
     case unsupported
+}
+
+enum AgentRemoteReconnectPolicy {
+    static func delayMilliseconds(afterFailureCount failureCount: Int) -> Int {
+        let exponent = min(max(failureCount - 1, 0), 4)
+        return min(500 * (1 << exponent), 8_000)
+    }
 }
 
 private extension Optional where Wrapped == String {

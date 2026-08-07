@@ -16,6 +16,7 @@ public struct ChatComposerView: View {
     private let isConnected: Bool
     private let accessoryLeadingShortcuts: [ChatAccessoryShortcut]
     private let accessoryShortcuts: [ChatAccessoryShortcut]
+    private let presentation: ChatPresentation
     private let onSend: (String, [ChatOutboundAttachment]) -> Void
     private let onInterrupt: (Bool) -> Void
     private let onOpenTerminal: () -> Void
@@ -48,6 +49,7 @@ public struct ChatComposerView: View {
         isConnected: Bool,
         accessoryLeadingShortcuts: [ChatAccessoryShortcut] = [],
         accessoryShortcuts: [ChatAccessoryShortcut] = [],
+        presentation: ChatPresentation = .standard,
         draft: Binding<String>,
         onSend: @escaping (String, [ChatOutboundAttachment]) -> Void,
         onInterrupt: @escaping (Bool) -> Void,
@@ -59,6 +61,7 @@ public struct ChatComposerView: View {
         self.isConnected = isConnected
         self.accessoryLeadingShortcuts = accessoryLeadingShortcuts
         self.accessoryShortcuts = accessoryShortcuts
+        self.presentation = presentation
         _draft = draft
         self.onSend = onSend
         self.onInterrupt = onInterrupt
@@ -115,13 +118,15 @@ public struct ChatComposerView: View {
             if isEnded {
                 endedRow
             } else {
-                ChatAccessoryChipRow(
-                    agentState: agentState,
-                    leadingShortcuts: composerAccessoryLeadingShortcuts,
-                    shortcuts: composerAccessoryShortcuts,
-                    onInterrupt: onInterrupt,
-                    onOpenTerminal: onOpenTerminal
-                )
+                if presentation == .standard {
+                    ChatAccessoryChipRow(
+                        agentState: agentState,
+                        leadingShortcuts: composerAccessoryLeadingShortcuts,
+                        shortcuts: composerAccessoryShortcuts,
+                        onInterrupt: onInterrupt,
+                        onOpenTerminal: onOpenTerminal
+                    )
+                }
                 #if os(iOS)
                 if !attachments.isEmpty {
                     attachmentStrip
@@ -171,7 +176,9 @@ public struct ChatComposerView: View {
         HStack(alignment: .bottom, spacing: 8) {
             #if os(iOS)
             attachButton
-            micButton
+            if presentation == .standard {
+                micButton
+            }
             #endif
             MobileComposerFieldContainer {
                 TextField(placeholder, text: $draft, axis: .vertical)
@@ -187,6 +194,13 @@ public struct ChatComposerView: View {
             } trailing: {
                 sendButton
             }
+            #if os(iOS)
+            // The visible glass shell is larger than the TextField itself.
+            // Treat all of that shell as a typing target so taps near its
+            // rounded edges do not appear to be ignored.
+            .contentShape(.rect)
+            .onTapGesture { isDraftFocused = true }
+            #endif
         }
     }
 
