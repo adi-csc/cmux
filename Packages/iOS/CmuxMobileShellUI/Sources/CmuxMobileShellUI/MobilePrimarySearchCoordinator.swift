@@ -208,6 +208,8 @@ final class MobilePrimarySearchCoordinator {
 extension MobilePrimaryTab {
     var searchScope: MobilePrimarySearchScope? {
         switch self {
+        case .agents:
+            nil
         case .workspaces:
             .workspaces
         case .notifications:

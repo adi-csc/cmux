@@ -165,7 +165,8 @@ struct WorkspaceShellView: View {
     @State var compactNavigationPath: [MobileWorkspacePreview.ID] = []
     @State var pendingCompactCreateNavigationWorkspaceIDs: Set<MobileWorkspacePreview.ID>?
     #if os(iOS)
-    @State private var selectedPrimaryTab: MobilePrimaryTab = .workspaces
+    @State private var selectedPrimaryTab: MobilePrimaryTab = .agents
+    @State private var agentAttentionCount = 0
     @State private var notificationNavigationPath: [MobileWorkspacePreview.ID] = []
     @State private var notificationSearchNavigationPath: [MobileWorkspacePreview.ID] = []
     @State private var pendingPrimarySearchWorkspaceNavigationID: MobileWorkspacePreview.ID?
@@ -227,11 +228,18 @@ struct WorkspaceShellView: View {
             MobilePrimaryTabScaffold(
                 selection: $selectedPrimaryTab,
                 searchCoordinator: primarySearchCoordinator,
+                agentAttentionCount: agentAttentionCount,
                 notificationUnreadCount: presentation.notificationUnreadCount,
                 taskComposerAction: usesCompactStack && !compactNavigationPath.isEmpty
                     ? nil
                     : taskComposerAction
             ) {
+                AgentRemoteControlView(
+                    store: store,
+                    openWorkspace: openWorkspaceFromAgentControl,
+                    attentionCountChanged: { agentAttentionCount = $0 }
+                )
+            } workspaces: {
                 workspaceTabContent(
                     canCreateWorkspaceForSelection: presentation.canCreateWorkspaceForSelection
                 )
@@ -850,6 +858,8 @@ struct WorkspaceShellView: View {
     private func consumePendingPrimarySearchNavigation(for tab: MobilePrimaryTab) {
         guard !primarySearchCoordinator.isPresented else { return }
         switch tab {
+        case .agents:
+            break
         case .workspaces:
             guard let workspaceID = pendingPrimarySearchWorkspaceNavigationID else { return }
             pendingPrimarySearchWorkspaceNavigationID = nil
@@ -889,6 +899,23 @@ struct WorkspaceShellView: View {
         }
         #endif
         selectWorkspaceImmediately(id)
+    }
+
+    /// Leaves the agent-first control center for the session's native cmux
+    /// workspace and terminal. Chat remains the default remote surface; this is
+    /// the explicit escape hatch for workflows that need raw terminal control.
+    private func openWorkspaceFromAgentControl(workspaceID: String, terminalID: String?) {
+        guard let workspace = store.workspaces.first(where: {
+            $0.id.rawValue == workspaceID || $0.rpcWorkspaceID.rawValue == workspaceID
+        }) else { return }
+
+        transitionPrimaryTab(to: .workspaces) {
+            selectWorkspaceImmediately(workspace.id)
+            if let terminalID,
+               workspace.terminals.contains(where: { $0.id.rawValue == terminalID }) {
+                store.selectTerminalFromChrome(.init(rawValue: terminalID))
+            }
+        }
     }
 
     private func selectWorkspaceImmediately(_ id: MobileWorkspacePreview.ID) {

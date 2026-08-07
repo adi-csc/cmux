@@ -6,6 +6,7 @@ import SwiftUI
 /// fixtures. Keeping the tab construction here guarantees that previews exercise
 /// the same labels, symbols, badge behavior, and selection semantics as the app.
 struct MobilePrimaryTabScaffold<
+    Agents: View,
     Workspaces: View,
     Notifications: View,
     WorkspaceSearch: View,
@@ -13,8 +14,10 @@ struct MobilePrimaryTabScaffold<
 >: View {
     @Binding var selection: MobilePrimaryTab
     @Bindable var searchCoordinator: MobilePrimarySearchCoordinator
+    let agentAttentionCount: Int
     let notificationUnreadCount: Int
     let taskComposerAction: (() -> Void)?
+    let agents: Agents
     let workspaces: Workspaces
     let notifications: Notifications
     let workspaceSearch: WorkspaceSearch
@@ -23,8 +26,10 @@ struct MobilePrimaryTabScaffold<
     init(
         selection: Binding<MobilePrimaryTab>,
         searchCoordinator: MobilePrimarySearchCoordinator,
+        agentAttentionCount: Int = 0,
         notificationUnreadCount: Int,
         taskComposerAction: (() -> Void)? = nil,
+        @ViewBuilder agents: () -> Agents,
         @ViewBuilder workspaces: () -> Workspaces,
         @ViewBuilder notifications: () -> Notifications,
         @ViewBuilder workspaceSearch: () -> WorkspaceSearch,
@@ -32,8 +37,10 @@ struct MobilePrimaryTabScaffold<
     ) {
         _selection = selection
         self.searchCoordinator = searchCoordinator
+        self.agentAttentionCount = agentAttentionCount
         self.notificationUnreadCount = notificationUnreadCount
         self.taskComposerAction = taskComposerAction
+        self.agents = agents()
         self.workspaces = workspaces()
         self.notifications = notifications()
         self.workspaceSearch = workspaceSearch()
@@ -69,7 +76,7 @@ struct MobilePrimaryTabScaffold<
                     searchCoordinator.synchronizeSelection(selection)
                 }
 
-                if selection == .workspaces, let taskComposerAction {
+                if (selection == .agents || selection == .workspaces), let taskComposerAction {
                     TaskComposerButton(
                         action: taskComposerAction,
                         diameter: iOS26BottomControlDiameter
@@ -179,6 +186,17 @@ struct MobilePrimaryTabScaffold<
 
     @TabContentBuilder<MobilePrimaryTab>
     private var primaryTabs: some TabContent<MobilePrimaryTab> {
+        Tab(value: MobilePrimaryTab.agents) {
+            agents
+        } label: {
+            Label(
+                L10n.string("mobile.tabs.agents", defaultValue: "Agents"),
+                systemImage: "sparkles"
+            )
+            .accessibilityIdentifier("MobilePrimaryTabAgents")
+        }
+        .badge(agentAttentionCount)
+
         Tab(value: MobilePrimaryTab.workspaces) {
             workspaces
         } label: {

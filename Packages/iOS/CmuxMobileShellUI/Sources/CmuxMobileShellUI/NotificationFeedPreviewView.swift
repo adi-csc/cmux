@@ -43,6 +43,9 @@ public struct NotificationFeedPreviewView: View {
                 searchCoordinator: primarySearchCoordinator,
                 notificationUnreadCount: items.lazy.filter { !$0.isRead }.count
             ) {
+                Text("Agent control fixture")
+                    .foregroundStyle(.secondary)
+            } workspaces: {
                 NotificationFeedPreviewWorkspacesView()
             } notifications: {
                 NavigationStack {
