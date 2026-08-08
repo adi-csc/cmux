@@ -60,6 +60,10 @@ struct AgentRemoteControlView: View {
             }
         }
         .task(id: feedKey) { await runSessionFeed() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, status != .connected else { return }
+            Task { await validateForegroundSnapshot() }
+        }
         .onChange(of: attentionCount, initial: true) { _, count in
             attentionCountChanged(count)
         }
@@ -135,9 +139,8 @@ struct AgentRemoteControlView: View {
     }
 
     private var feedKey: String {
-        let foreground = scenePhase == .active ? 1 : 0
         let connected = store.connectionState == .connected ? 1 : 0
-        return "\(store.agentChatEventSourceIdentity)#\(connected)#\(foreground)#\(refreshGeneration)"
+        return "\(store.agentChatEventSourceIdentity)#\(connected)#\(refreshGeneration)"
     }
 
     private var visibleSessions: [ChatSessionDescriptor] {
@@ -198,11 +201,13 @@ struct AgentRemoteControlView: View {
     }
 
     private func runSessionFeed() async {
-        guard scenePhase == .active else { return }
         if sessions.isEmpty { status = .loading }
         var failureCount = 0
 
-        while !Task.isCancelled, scenePhase == .active {
+        // Preserve the task and subscription while iOS suspends the process.
+        // Suspension freezes the stream; cancelling it here would force a new
+        // RPC subscription and an empty loading state on every return.
+        while !Task.isCancelled {
             guard let source = store.makeChatEventSource() else {
                 status = .reconnecting
                 await store.reconnectOrRefresh()
@@ -249,6 +254,30 @@ struct AgentRemoteControlView: View {
             afterFailureCount: failureCount
         )
         try? await Task.sleep(for: .milliseconds(milliseconds))
+    }
+
+    /// Reconcile cached rows after suspension without discarding a healthy
+    /// subscription. Only an actual failed pull asks the shell to repair the
+    /// connection and restarts the feed.
+    private func validateForegroundSnapshot() async {
+        guard let source = store.makeChatEventSource() else {
+            status = .reconnecting
+            await store.reconnectOrRefresh()
+            refreshGeneration &+= 1
+            return
+        }
+        do {
+            sessions = try await source.sessions(workspaceID: nil)
+            status = .connected
+        } catch {
+            if store.chatSessionListFailureMeansUnsupported(error) {
+                status = .unsupported
+                return
+            }
+            status = .reconnecting
+            await store.reconnectOrRefresh()
+            refreshGeneration &+= 1
+        }
     }
 
     private func refreshSnapshot() async {
@@ -330,9 +359,8 @@ private struct AgentRemoteConversationView: View {
     }
 
     private var conversationKey: String {
-        let foreground = scenePhase == .active ? 1 : 0
         let connected = store.connectionState == .connected ? 1 : 0
-        return "\(session.id)#\(session.version)#\(store.agentChatEventSourceIdentity)#\(connected)#\(foreground)"
+        return "\(session.id)#\(session.version)#\(store.agentChatEventSourceIdentity)#\(connected)"
     }
 
     private var conversationSubtitle: String {
@@ -345,9 +373,8 @@ private struct AgentRemoteConversationView: View {
     }
 
     private func runConversation() async {
-        guard scenePhase == .active else { return }
         var source = store.makeChatEventSource()
-        while source == nil, !Task.isCancelled, scenePhase == .active {
+        while source == nil, !Task.isCancelled {
             isUnavailable = true
             await store.reconnectOrRefresh()
             guard !Task.isCancelled else { return }

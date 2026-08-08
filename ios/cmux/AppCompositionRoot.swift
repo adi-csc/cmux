@@ -8,6 +8,7 @@ import CmuxMobileTransport
 import CmuxSentryReporting
 import Foundation
 import SwiftUI
+import UIKit
 import cmuxFeature
 
 /// Holds the de-singletonized graph the `cmuxApp` builds once at launch.
@@ -189,6 +190,12 @@ final class AppCompositionRoot {
     private var currentSessionStartedAt: Date?
     /// The id of the session currently in progress, echoed onto `ios_session_ended`.
     private var currentSessionID: String?
+    #if DEBUG
+    /// Dev builds use iOS's finite background allowance to keep the existing
+    /// Mac transport alive during short app switches. The system still owns
+    /// the deadline; production builds do not request this extra grace period.
+    private var connectionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    #endif
 
     /// Drives the app-lifecycle + sessionization analytics on scene-phase changes.
     ///
@@ -203,6 +210,7 @@ final class AppCompositionRoot {
         let emitter = analytics.emitter
         switch phase {
         case .active:
+            endConnectionBackgroundGracePeriod()
             iroh.didBecomeActive()
             Task { await pushCoordinator.refreshReadiness() }
             let now = Date()
@@ -232,6 +240,7 @@ final class AppCompositionRoot {
             // background transition entirely, so snapshot diagnostics now.
             iroh.archiveDiagnostics()
         case .background:
+            beginConnectionBackgroundGracePeriod()
             iroh.didEnterBackground()
             let now = Date()
             analytics.sessionStore.recordBackgrounded(at: now)
@@ -251,5 +260,24 @@ final class AppCompositionRoot {
         @unknown default:
             break
         }
+    }
+
+    private func beginConnectionBackgroundGracePeriod() {
+        #if DEBUG
+        guard connectionBackgroundTask == .invalid else { return }
+        connectionBackgroundTask = UIApplication.shared.beginBackgroundTask(
+            withName: "cmux.connection-grace"
+        ) { [weak self] in
+            Task { @MainActor in self?.endConnectionBackgroundGracePeriod() }
+        }
+        #endif
+    }
+
+    private func endConnectionBackgroundGracePeriod() {
+        #if DEBUG
+        guard connectionBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(connectionBackgroundTask)
+        connectionBackgroundTask = .invalid
+        #endif
     }
 }

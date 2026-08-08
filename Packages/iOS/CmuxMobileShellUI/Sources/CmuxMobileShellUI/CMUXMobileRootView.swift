@@ -251,7 +251,11 @@ struct CMUXMobileRootView: View {
                 // backgrounded routes to the sign-in page instead of waiting for a
                 // failed connect to surface a confusing host-side message.
                 Task { await authManager.revalidateSession() }
-            } else {
+            } else if phase == .background {
+                // `.inactive` is often only Control Center, a system prompt,
+                // or the app-switch transition. Keep the live shell warm until
+                // iOS actually backgrounds us so brief interruptions do not
+                // trigger a full foreground recovery cycle.
                 store.suspendForegroundRefresh()
             }
             #if os(iOS)
